@@ -148,10 +148,36 @@
 
         // ---------- 语音录入 ----------
         function startRecord() {
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                alert('当前浏览器不支持语音，请用 Chrome 或 Edge 打开。');
-                return;
-            }
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        alert('当前浏览器不支持语音，请用 Chrome 或 Edge 打开。');
+        return;
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN';
+    recognition.interimResults = false;
+    document.getElementById('status').innerText = '🎙️ 正在准备...';
+
+    recognition.onresult = (event) => {
+        const spokenText = event.results[0][0].transcript;
+        document.getElementById('status').innerText = '识别：' + spokenText;
+        addItemFromText(spokenText);
+    };
+
+    recognition.onerror = (event) => {
+        document.getElementById('status').innerText = '❌ 识别出错：' + event.error;
+    };
+
+    // 这里就是修复“秒断”的关键：延迟启动
+    setTimeout(() => {
+        try {
+            recognition.start();
+            document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
+        } catch (e) {
+            document.getElementById('status').innerText = '❌ 启动失败，请再点一次';
+        }
+    }, 200); // 200毫秒延迟
+}
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             const recognition = new SpeechRecognition();
             recognition.lang = 'zh-CN';
