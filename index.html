@@ -48,107 +48,120 @@
         <p style="margin-top:0"><strong>🧠 语义搜索</strong> <span style="font-size:0.8em;color:#666;">（基于AI，自动理解你找什么）</span></p>
         <p style="font-size:0.9em;">现在你不需要手动添加同义词了，搜索“剪指甲的玩意儿”就能找到“指甲刀”。</p>
     </div>
-        <script>
-        // 注册 Service Worker（PWA 离线缓存，Chrome 全屏必要条件）
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('data:application/javascript;base64,' + btoa(
-                    'self.addEventListener("fetch", e => {})'
-                )).catch(() => {});
-            });
-        }
+    <script>
+    // 注册 Service Worker（PWA 离线缓存，Chrome 全屏必要条件）
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('data:application/javascript;base64,' + btoa(
+                'self.addEventListener("fetch", e => {})'
+            )).catch(() => {});
+        });
+    }
 
-        const STORAGE_KEY = 'storage_genius_v3';
+    const STORAGE_KEY = 'storage_genius_v3';
 
-        // ---------- 语义搜索核心 ----------
-        async function getEmbedding(text) {
-            const url = 'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese';
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ inputs: text })
-            });
-            if (!response.ok) throw new Error('Embedding API error');
-            const result = await response.json();
-            return result;
-        }
-
-        function cosineSimilarity(vecA, vecB) {
-            let dotProduct = 0, normA = 0, normB = 0;
-            for (let i = 0; i < vecA.length; i++) {
-                dotProduct += vecA[i] * vecB[i];
-                normA += vecA[i] * vecA[i];
-                normB += vecB[i] * vecB[i];
-            }
-            return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-        }
-
-        let itemEmbeddings = [];
-
-        async function buildIndex() {
-            const items = getItems();
-            if (items.length === 0) {
-                itemEmbeddings = [];
-                return;
-            }
-            document.getElementById('status').innerText = '🧠 正在理解你的物品...';
+    // ---------- 语义搜索核心（带自动重试）----------
+    async function getEmbedding(text, retries = 2) {
+        const url = 'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese';
+        for (let i = 0; i <= retries; i++) {
             try {
-                const names = items.map(i => i.item);
-                const embeddings = await getEmbedding(names);
-                itemEmbeddings = items.map((item, idx) => ({
-                    id: item.id,
-                    embedding: embeddings[idx]
-                }));
-                document.getElementById('status').innerText = '✅ 语义索引已就绪';
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ inputs: text })
+                });
+                if (!response.ok) throw new Error('API response error');
+                const result = await response.json();
+                return result;
             } catch (e) {
-                console.error('语义索引构建失败:', e);
-                document.getElementById('status').innerText = '⚠️ 语义服务暂时不可用，将使用普通搜索';
-                itemEmbeddings = [];
+                console.error(`Embedding 请求失败 (尝试 ${i + 1}/${retries + 1}):`, e);
+                if (i < retries) {
+                    // 等待 3 秒后重试
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                } else {
+                    throw new Error('多次重试后仍无法连接语义服务');
+                }
             }
         }
+    }
 
-        function generateId() {
-            return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    function cosineSimilarity(vecA, vecB) {
+        let dotProduct = 0, normA = 0, normB = 0;
+        for (let i = 0; i < vecA.length; i++) {
+            dotProduct += vecA[i] * vecB[i];
+            normA += vecA[i] * vecA[i];
+            normB += vecB[i] * vecB[i];
         }
+        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
 
-        function getItems() {
-            return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    let itemEmbeddings = [];
+
+    async function buildIndex() {
+        const items = getItems();
+        if (items.length === 0) {
+            itemEmbeddings = [];
+            return;
         }
-
-        function saveItems(items) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+        document.getElementById('status').innerText = '🧠 正在理解你的物品...';
+        try {
+            const names = items.map(i => i.item);
+            const embeddings = await getEmbedding(names);
+            itemEmbeddings = items.map((item, idx) => ({
+                id: item.id,
+                embedding: embeddings[idx]
+            }));
+            document.getElementById('status').innerText = '✅ 语义索引已就绪';
+        } catch (e) {
+            console.error('语义索引构建失败:', e);
+            document.getElementById('status').innerText = '🔄 语义服务连接失败，稍后会自动重试';
+            itemEmbeddings = [];
+            // 一分钟后自动重试
+            setTimeout(() => buildIndex(), 60000);
         }
+    }
 
-        function parseSpokenText(text) {
-            const match = text.match(/把(.+?)放在(.+)/);
-            return match ? { item: match[1].trim(), location: match[2].trim() } : { item: text, location: '未指定' };
+    function generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    }
+
+    function getItems() {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    }
+
+    function saveItems(items) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    }
+
+    function parseSpokenText(text) {
+        const match = text.match(/把(.+?)放在(.+)/);
+        return match ? { item: match[1].trim(), location: match[2].trim() } : { item: text, location: '未指定' };
+    }
+
+    function addItemFromText(text) {
+        const { item, location } = parseSpokenText(text);
+        const items = getItems();
+        items.push({
+            id: generateId(),
+            item,
+            location,
+            raw: text,
+            time: new Date().toLocaleString()
+        });
+        saveItems(items);
+        document.getElementById('status').innerText = '✅ 已记录：' + item + ' → ' + location;
+        listAll();
+        buildIndex();
+    }
+
+    // ---------- 手动输入 ----------
+    function manualAdd() {
+        const text = prompt('请输入物品和位置，例如：\n指甲刀，鞋柜\n（用逗号分隔物品和位置）');
+        if (text && text.trim()) {
+            addItemFromText(text);
         }
-
-        function addItemFromText(text) {
-            const { item, location } = parseSpokenText(text);
-            const items = getItems();
-            items.push({
-                id: generateId(),
-                item,
-                location,
-                raw: text,
-                time: new Date().toLocaleString()
-            });
-            saveItems(items);
-            document.getElementById('status').innerText = '✅ 已记录：' + item + ' → ' + location;
-            listAll();
-            buildIndex();
-        }
-
-        // ---------- 手动输入 ----------
-        function manualAdd() {
-            const text = prompt('请输入物品和位置，例如：\n指甲刀，鞋柜\n（用逗号分隔物品和位置）');
-            if (text && text.trim()) {
-                addItemFromText(text);
-            }
-        }
-
-        // ---------- 语音录入（修复秒断问题：延迟启动）----------
+    }
+                // ---------- 语音录入（修复秒断问题：延迟启动）----------
         function startRecord() {
             if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
                 alert('当前浏览器不支持语音，你可以使用“手动记录”按钮。');
@@ -189,6 +202,12 @@
             const items = getItems();
             if (items.length === 0) { listAll(); return; }
 
+            // 如果语义索引还没建好，或者索引数量不对，尝试重新建立
+            if (itemEmbeddings.length !== items.length) {
+                document.getElementById('status').innerText = '🧠 正在建立语义索引，请稍后再搜...';
+                await buildIndex();
+            }
+
             if (itemEmbeddings.length === items.length) {
                 try {
                     const queryEmbedding = await getEmbedding(rawKeyword);
@@ -211,6 +230,7 @@
                 }
             }
 
+            // 回退到关键字模糊搜索
             const lowerKeyword = rawKeyword.toLowerCase();
             const filtered = items.filter(i => 
                 (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
