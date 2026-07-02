@@ -61,8 +61,16 @@
     const STORAGE_KEY = 'storage_genius_v3';
 
     // ---------- 语义搜索核心（带自动重试）----------
-    async function getEmbedding(text, retries = 2) {
-        const url = 'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese';
+    async function getEmbedding(text, retries = 1) {
+    // 三个 API 端点：主站 + 两个国内镜像
+    const urls = [
+        'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese',
+        'https://hf-mirror.com/api/inference/models/shibing624/text2vec-base-chinese',
+        'https://huggingface.co/api/inference/models/shibing624/text2vec-base-chinese'
+    ];
+
+    for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
+        const url = urls[urlIdx];
         for (let i = 0; i <= retries; i++) {
             try {
                 const response = await fetch(url, {
@@ -72,19 +80,18 @@
                 });
                 if (!response.ok) throw new Error('API response error');
                 const result = await response.json();
+                console.log('✅ 语义服务连接成功，使用:', url);
                 return result;
             } catch (e) {
-                console.error(`Embedding 请求失败 (尝试 ${i + 1}/${retries + 1}):`, e);
+                console.error(`请求失败 (${url}, 尝试 ${i + 1}/${retries + 1}):`, e);
                 if (i < retries) {
-                    // 等待 3 秒后重试
                     await new Promise(resolve => setTimeout(resolve, 3000));
-                } else {
-                    throw new Error('多次重试后仍无法连接语义服务');
                 }
             }
         }
     }
-
+    throw new Error('所有镜像均无法连接语义服务');
+    }
     function cosineSimilarity(vecA, vecB) {
         let dotProduct = 0, normA = 0, normB = 0;
         for (let i = 0; i < vecA.length; i++) {
