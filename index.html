@@ -202,40 +202,49 @@ ${itemList}
         }
 
         async function searchItem() {
-            const rawKeyword = document.getElementById('searchInput').value.trim();
-            if (!rawKeyword) { listAll(); return; }
+    const rawKeyword = document.getElementById('searchInput').value.trim();
+    if (!rawKeyword) { listAll(); return; }
 
-            const items = getItems();
-            if (items.length === 0) { listAll(); return; }
+    const items = getItems();
+    if (items.length === 0) { listAll(); return; }
 
-            // 优先使用 DeepSeek 语义搜索
-            const apiKey = getApiKey();
-            if (apiKey) {
-                document.getElementById('status').innerText = '🤖 AI 正在理解...';
-                const aiResult = await semanticSearch(rawKeyword, items);
-                
-                if (aiResult) {
-                    const matched = items.filter(i => 
-                        i.item === aiResult ||
-                        i.item.toLowerCase().includes(aiResult.toLowerCase()) ||
-                        aiResult.toLowerCase().includes(i.item.toLowerCase())
-                    );
-                    if (matched.length > 0) {
-                        renderList(matched);
-                        document.getElementById('status').innerText = `🤖 AI 帮你找到了：${aiResult}`;
-                        return;
-                    }
-                }
+    // 优先使用 DeepSeek 语义搜索
+    const apiKey = getApiKey();
+    if (apiKey) {
+        document.getElementById('status').innerText = '🤖 AI 正在理解...';
+        const aiResult = await semanticSearch(rawKeyword, items);
+        
+        if (aiResult) {
+            // 显示 AI 返回结果（方便调试，确认无误后可删除这行）
+            alert('AI 返回的物品名是：' + aiResult);
+            
+            // 更宽容的匹配
+            const matched = items.filter(i => {
+                const itemLower = i.item.toLowerCase();
+                const resultLower = aiResult.toLowerCase();
+                return itemLower === resultLower ||
+                       itemLower.includes(resultLower) ||
+                       resultLower.includes(itemLower) ||
+                       itemLower.split('').filter(char => resultLower.includes(char)).length >= 2;
+            });
+            if (matched.length > 0) {
+                renderList(matched);
+                document.getElementById('status').innerText = `🤖 AI 帮你找到了：${aiResult}`;
+                return;
+            } else {
+                alert('AI 返回了"' + aiResult + '"，但本地没找到匹配的物品。');
             }
+        }
+    }
 
-            // 回退：本地模糊搜索
-            const lowerKeyword = rawKeyword.toLowerCase();
-            const filtered = items.filter(i => 
-                (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
-            );
-            renderList(filtered);
-            document.getElementById('status').innerText = filtered.length ? 
-                `🔍 找到 ${filtered.length} 条` : '没找到，换个说法试试？';
+    // 回退：本地模糊搜索
+    const lowerKeyword = rawKeyword.toLowerCase();
+    const filtered = items.filter(i => 
+        (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
+    );
+    renderList(filtered);
+    document.getElementById('status').innerText = filtered.length ? 
+        `🔍 找到 ${filtered.length} 条` : '没找到，换个说法试试？';
         }
 
         function listAll() {
