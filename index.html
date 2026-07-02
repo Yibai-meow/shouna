@@ -5,13 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>家庭收纳神器</title>
 
-    <!-- 苹果全屏支持 -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="收纳神器">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
 
-    <!-- 安卓 Chrome 全屏关键：Web App Manifest -->
     <link rel="manifest" id="manifest" href="data:application/manifest+json;base64,ewogICJuYW1lIjogIuaUtue6s+elnuWZqCIsCiAgInNob3J0X25hbWUiOiAi5pS257qzIiwKICAic3RhcnRfdXJsIjogIi4vIiwKICAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwKICAiYmFja2dyb3VuZF9jb2xvciI6ICIjZjlmOWY5IiwKICAidGhlbWVfY29sb3IiOiAiIzAwN2FmZiIsCiAgImljb25zIjogW3sKICAgICJzcmMiOiAiZGF0YTppbWFnZS9zdmcreG1sLDxzdmcgeG1sbnM9J2h0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnJyB2aWV3Qm94PScwIDAgMTAwIDEwMCc+PHRleHQgeT0nLjllbScgZm9udC1zaXplPSc5MCc+8J+TpjwvdGV4dD48L3N2Zz4iLAogICAgInNpemVzIjogIjE5MngxOTIiLAogICAgInR5cGUiOiAiaW1hZ2Uvc3ZnK3htbCIKICB9XQp9">
     <meta name="theme-color" content="#007aff">
 
@@ -27,8 +25,9 @@
         .location { color: #666; font-size: 0.9em; }
         .time { font-size: 0.8em; color: #aaa; display: block; }
         #status { color: #888; margin: 10px 0; font-size: 0.9em; }
-        .setting-box { background: #fff; padding: 15px; border-radius: 12px; margin: 15px 0; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
         .small-btn { padding: 6px 12px; font-size: 0.9em; }
+        .settings-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+        .settings-row input { flex: 1; }
     </style>
 </head>
 <body>
@@ -39,17 +38,21 @@
         <button onclick="listAll()">📋 全部物品</button>
         <button class="export-btn" onclick="exportToCSV()">📥 导出表格</button>
     </div>
-    <p>🔎 找东西：<input type="text" id="searchInput" placeholder="试试说“剪指甲的东西”或“充电宝”">
+    <p>🔎 找东西：<input type="text" id="searchInput" placeholder="试试说"剪指甲的东西"或"充电宝"">
     </p>
     <p id="status"></p>
     <ul id="itemList"></ul>
 
-    <div class="setting-box">
-        <p style="margin-top:0"><strong>🧠 语义搜索</strong> <span style="font-size:0.8em;color:#666;">（基于AI，自动理解你找什么）</span></p>
-        <p style="font-size:0.9em;">现在你不需要手动添加同义词了，搜索“剪指甲的玩意儿”就能找到“指甲刀”。</p>
+    <div class="setting-box" style="margin-top:15px;">
+        <p style="margin-top:0"><strong>🔑 AI 语义搜索设置</strong></p>
+        <p style="font-size:0.8em;color:#666;">输入 DeepSeek API Key 启用智能搜索（Key 只存你手机里，不上传）</p>
+        <div class="settings-row">
+            <input type="password" id="apiKeyInput" placeholder="sk-xxxxxxxxxxxxxxxx">
+            <button onclick="saveApiKey()">💾 保存</button>
+        </div>
+        <p id="keyStatus" style="font-size:0.8em;color:#888;"></p>
     </div>
     <script>
-    // 注册 Service Worker（PWA 离线缓存，Chrome 全屏必要条件）
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('data:application/javascript;base64,' + btoa(
@@ -58,75 +61,35 @@
         });
     }
 
-    const STORAGE_KEY = 'storage_genius_v3';
+    const STORAGE_KEY = 'storage_genius_v7';
+    const API_KEY_STORAGE = 'deepseek_api_key';
 
-    // ---------- 语义搜索核心（带自动重试）----------
-    async function getEmbedding(text, retries = 1) {
-    // 三个 API 端点：主站 + 两个国内镜像
-    const urls = [
-        'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese',
-        'https://hf-mirror.com/api/inference/models/shibing624/text2vec-base-chinese',
-        'https://huggingface.co/api/inference/models/shibing624/text2vec-base-chinese'
-    ];
-
-    for (let urlIdx = 0; urlIdx < urls.length; urlIdx++) {
-        const url = urls[urlIdx];
-        for (let i = 0; i <= retries; i++) {
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ inputs: text })
-                });
-                if (!response.ok) throw new Error('API response error');
-                const result = await response.json();
-                console.log('✅ 语义服务连接成功，使用:', url);
-                return result;
-            } catch (e) {
-                console.error(`请求失败 (${url}, 尝试 ${i + 1}/${retries + 1}):`, e);
-                if (i < retries) {
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                }
-            }
-        }
-    }
-    throw new Error('所有镜像均无法连接语义服务');
-    }
-    function cosineSimilarity(vecA, vecB) {
-        let dotProduct = 0, normA = 0, normB = 0;
-        for (let i = 0; i < vecA.length; i++) {
-            dotProduct += vecA[i] * vecB[i];
-            normA += vecA[i] * vecA[i];
-            normB += vecB[i] * vecB[i];
-        }
-        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    // ---------- API Key 管理 ----------
+    function getApiKey() {
+        return localStorage.getItem(API_KEY_STORAGE) || '';
     }
 
-    let itemEmbeddings = [];
-
-    async function buildIndex() {
-        const items = getItems();
-        if (items.length === 0) {
-            itemEmbeddings = [];
+    function saveApiKey() {
+        const key = document.getElementById('apiKeyInput').value.trim();
+        if (!key) {
+            document.getElementById('keyStatus').innerText = '⚠️ 请输入 Key';
             return;
         }
-        document.getElementById('status').innerText = '🧠 正在理解你的物品...';
-        try {
-            const names = items.map(i => i.item);
-            const embeddings = await getEmbedding(names);
-            itemEmbeddings = items.map((item, idx) => ({
-                id: item.id,
-                embedding: embeddings[idx]
-            }));
-            document.getElementById('status').innerText = '✅ 语义索引已就绪';
-        } catch (e) {
-            console.error('语义索引构建失败:', e);
-            document.getElementById('status').innerText = '🔄 语义服务连接失败，稍后会自动重试';
-            itemEmbeddings = [];
-            // 一分钟后自动重试
-            setTimeout(() => buildIndex(), 60000);
-        }
+        localStorage.setItem(API_KEY_STORAGE, key);
+        document.getElementById('apiKeyInput').value = '';
+        document.getElementById('keyStatus').innerText = '✅ Key 已保存（仅存于本设备）';
     }
+
+    // 页面加载时显示 Key 状态
+    (function checkKeyStatus() {
+        const savedKey = getApiKey();
+        if (savedKey) {
+            document.getElementById('keyStatus').innerText = '✅ Key 已配置，语义搜索可用';
+            document.getElementById('apiKeyInput').placeholder = '已保存，无需重复输入';
+        } else {
+            document.getElementById('keyStatus').innerText = '⚠️ 未配置 Key，将使用本地搜索';
+        }
+    })();
 
     function generateId() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -158,50 +121,86 @@
         saveItems(items);
         document.getElementById('status').innerText = '✅ 已记录：' + item + ' → ' + location;
         listAll();
-        buildIndex();
     }
 
-    // ---------- 手动输入 ----------
     function manualAdd() {
         const text = prompt('请输入物品和位置，例如：\n指甲刀，鞋柜\n（用逗号分隔物品和位置）');
         if (text && text.trim()) {
             addItemFromText(text);
         }
     }
-                // ---------- 语音录入（修复秒断问题：延迟启动）----------
-        function startRecord() {
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-                alert('当前浏览器不支持语音，你可以使用“手动记录”按钮。');
-                return;
+
+    function startRecord() {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            alert('当前浏览器不支持语音，你可以使用"手动记录"按钮。');
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.interimResults = false;
+        document.getElementById('status').innerText = '🎙️ 正在准备...';
+
+        recognition.onresult = (event) => {
+            const spokenText = event.results[0][0].transcript;
+            document.getElementById('status').innerText = '识别：' + spokenText;
+            addItemFromText(spokenText);
+        };
+
+        recognition.onerror = (event) => {
+            document.getElementById('status').innerText = '❌ 识别出错：' + event.error + '，请用"手动记录"';
+        };
+
+        setTimeout(() => {
+            try {
+                recognition.start();
+                document.getElementById('status').innerText = '🎙️ 正在听... 说"我把XX放在了YY"';
+            } catch (e) {
+                document.getElementById('status').innerText = '❌ 启动失败，请用"手动记录"';
             }
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            const recognition = new SpeechRecognition();
-            recognition.lang = 'zh-CN';
-            recognition.interimResults = false;
-            document.getElementById('status').innerText = '🎙️ 正在准备...';
+        }, 200);
+    }
+                // ========== DeepSeek 语义搜索 ==========
+        async function semanticSearch(query, items) {
+            const apiKey = getApiKey();
+            if (!apiKey) return null;
 
-            recognition.onresult = (event) => {
-                const spokenText = event.results[0][0].transcript;
-                document.getElementById('status').innerText = '识别：' + spokenText;
-                addItemFromText(spokenText);
-            };
+            const itemList = items.map(i => `"${i.item}"（位置：${i.location}）`).join('\n');
+            
+            const prompt = `你是家庭收纳助手。用户想找东西，可能用口语化描述。
+用户说："${query}"
 
-            recognition.onerror = (event) => {
-                document.getElementById('status').innerText = '❌ 识别出错：' + event.error + '，请用“手动记录”';
-            };
+家里现有物品：
+${itemList}
 
-            // 延迟启动，避免秒断
-            setTimeout(() => {
-                try {
-                    recognition.start();
-                    document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
-                } catch (e) {
-                    document.getElementById('status').innerText = '❌ 启动失败，请用“手动记录”';
-                }
-            }, 200);
+请判断用户最可能想找哪个物品。只回答物品名称，不要解释。如果没有匹配的，回答"无"。`;
+
+            try {
+                const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: 'deepseek-chat',
+                        messages: [{ role: 'user', content: prompt }],
+                        max_tokens: 50,
+                        temperature: 0
+                    })
+                });
+
+                if (!response.ok) throw new Error('API error');
+                const data = await response.json();
+                const answer = data.choices[0].message.content.trim();
+                console.log('DeepSeek 返回:', answer);
+                return answer === '无' ? null : answer;
+            } catch (e) {
+                console.error('DeepSeek 搜索失败:', e);
+                return null;
+            }
         }
 
-        // ---------- 搜索（语义增强）----------
         async function searchItem() {
             const rawKeyword = document.getElementById('searchInput').value.trim();
             if (!rawKeyword) { listAll(); return; }
@@ -209,42 +208,34 @@
             const items = getItems();
             if (items.length === 0) { listAll(); return; }
 
-            // 如果语义索引还没建好，或者索引数量不对，尝试重新建立
-            if (itemEmbeddings.length !== items.length) {
-                document.getElementById('status').innerText = '🧠 正在建立语义索引，请稍后再搜...';
-                await buildIndex();
-            }
-
-            if (itemEmbeddings.length === items.length) {
-                try {
-                    const queryEmbedding = await getEmbedding(rawKeyword);
-                    const scores = items.map((item, idx) => {
-                        const emb = itemEmbeddings.find(e => e.id === item.id);
-                        if (!emb) return { item, score: 0 };
-                        return { item, score: cosineSimilarity(queryEmbedding, emb.embedding) };
-                    });
-                    const filtered = scores
-                        .filter(s => s.score > 0.5)
-                        .sort((a, b) => b.score - a.score)
-                        .map(s => s.item);
-                    
-                    renderList(filtered);
-                    document.getElementById('status').innerText = filtered.length ? 
-                        `🔍 语义搜索找到 ${filtered.length} 条` : '没找到，换个说法试试？';
-                    return;
-                } catch (e) {
-                    console.log('语义搜索失败，回退到关键字搜索:', e);
+            // 优先使用 DeepSeek 语义搜索
+            const apiKey = getApiKey();
+            if (apiKey) {
+                document.getElementById('status').innerText = '🤖 AI 正在理解...';
+                const aiResult = await semanticSearch(rawKeyword, items);
+                
+                if (aiResult) {
+                    const matched = items.filter(i => 
+                        i.item === aiResult ||
+                        i.item.toLowerCase().includes(aiResult.toLowerCase()) ||
+                        aiResult.toLowerCase().includes(i.item.toLowerCase())
+                    );
+                    if (matched.length > 0) {
+                        renderList(matched);
+                        document.getElementById('status').innerText = `🤖 AI 帮你找到了：${aiResult}`;
+                        return;
+                    }
                 }
             }
 
-            // 回退到关键字模糊搜索
+            // 回退：本地模糊搜索
             const lowerKeyword = rawKeyword.toLowerCase();
             const filtered = items.filter(i => 
                 (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
             );
             renderList(filtered);
             document.getElementById('status').innerText = filtered.length ? 
-                `找到 ${filtered.length} 条（关键字匹配）` : '没找到，试试说“剪指甲的工具”？';
+                `🔍 找到 ${filtered.length} 条` : '没找到，换个说法试试？';
         }
 
         function listAll() {
@@ -279,7 +270,6 @@
             items = items.filter(i => i.id !== id);
             saveItems(items);
             listAll();
-            buildIndex();
         }
 
         function exportToCSV() {
@@ -308,7 +298,6 @@
 
         window.addEventListener('load', () => {
             listAll();
-            buildIndex();
         });
     </script>
 </body>
