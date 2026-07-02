@@ -60,7 +60,6 @@
         const STORAGE_KEY = 'storage_genius_v3';
 
         // ---------- 语义搜索核心 ----------
-        // 使用免费、免Key的中文语义编码接口（text2vec-base-chinese）
         async function getEmbedding(text) {
             const url = 'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese';
             const response = await fetch(url, {
@@ -70,10 +69,9 @@
             });
             if (!response.ok) throw new Error('Embedding API error');
             const result = await response.json();
-            return result;  // 返回向量数组
+            return result;
         }
 
-        // 余弦相似度计算
         function cosineSimilarity(vecA, vecB) {
             let dotProduct = 0, normA = 0, normB = 0;
             for (let i = 0; i < vecA.length; i++) {
@@ -84,8 +82,7 @@
             return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
         }
 
-        // 为所有物品建立语义索引（首次加载或物品变更时重建）
-        let itemEmbeddings = []; // 存储 { id, embedding }
+        let itemEmbeddings = [];
 
         async function buildIndex() {
             const items = getItems();
@@ -95,10 +92,8 @@
             }
             document.getElementById('status').innerText = '🧠 正在理解你的物品...';
             try {
-                // 批量获取向量（一次API调用处理多个物品名）
                 const names = items.map(i => i.item);
                 const embeddings = await getEmbedding(names);
-                // 返回的是向量数组，每个对应一个名字
                 itemEmbeddings = items.map((item, idx) => ({
                     id: item.id,
                     embedding: embeddings[idx]
@@ -111,7 +106,6 @@
             }
         }
 
-        // ---------- 物品数据操作 ----------
         function generateId() {
             return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
         }
@@ -142,48 +136,20 @@
             saveItems(items);
             document.getElementById('status').innerText = '✅ 已记录：' + item + ' → ' + location;
             listAll();
-            // 索引需重建
             buildIndex();
         }
 
-        // ---------- 语音录入 ----------
+        // ---------- 语音录入（修复秒断问题：延迟启动）----------
         function startRecord() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-        alert('当前浏览器不支持语音，请用 Chrome 或 Edge 打开。');
-        return;
-    }
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'zh-CN';
-    recognition.interimResults = false;
-    document.getElementById('status').innerText = '🎙️ 正在准备...';
-
-    recognition.onresult = (event) => {
-        const spokenText = event.results[0][0].transcript;
-        document.getElementById('status').innerText = '识别：' + spokenText;
-        addItemFromText(spokenText);
-    };
-
-    recognition.onerror = (event) => {
-        document.getElementById('status').innerText = '❌ 识别出错：' + event.error;
-    };
-
-    // 这里就是修复“秒断”的关键：延迟启动
-    setTimeout(() => {
-        try {
-            recognition.start();
-            document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
-        } catch (e) {
-            document.getElementById('status').innerText = '❌ 启动失败，请再点一次';
-        }
-    }, 200); // 200毫秒延迟
-}
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                alert('当前浏览器不支持语音，请用 Chrome 或 Edge 打开。');
+                return;
+            }
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             const recognition = new SpeechRecognition();
             recognition.lang = 'zh-CN';
             recognition.interimResults = false;
-            document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
-            recognition.start();
+            document.getElementById('status').innerText = '🎙️ 正在准备...';
 
             recognition.onresult = (event) => {
                 const spokenText = event.results[0][0].transcript;
@@ -194,9 +160,19 @@
             recognition.onerror = (event) => {
                 document.getElementById('status').innerText = '❌ 识别出错：' + event.error;
             };
+
+            // 延迟启动，避免秒断
+            setTimeout(() => {
+                try {
+                    recognition.start();
+                    document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
+                } catch (e) {
+                    document.getElementById('status').innerText = '❌ 启动失败，请再点一次';
+                }
+            }, 200);
         }
 
-        // ---------- 搜索（语义增强） ----------
+        // ---------- 搜索（语义增强）----------
         async function searchItem() {
             const rawKeyword = document.getElementById('searchInput').value.trim();
             if (!rawKeyword) { listAll(); return; }
@@ -204,7 +180,6 @@
             const items = getItems();
             if (items.length === 0) { listAll(); return; }
 
-            // 尝试语义搜索
             if (itemEmbeddings.length === items.length) {
                 try {
                     const queryEmbedding = await getEmbedding(rawKeyword);
@@ -213,7 +188,6 @@
                         if (!emb) return { item, score: 0 };
                         return { item, score: cosineSimilarity(queryEmbedding, emb.embedding) };
                     });
-                    // 相似度阈值0.5以上才认为相关
                     const filtered = scores
                         .filter(s => s.score > 0.5)
                         .sort((a, b) => b.score - a.score)
@@ -228,7 +202,6 @@
                 }
             }
 
-            // 回退：普通关键字模糊搜索
             const lowerKeyword = rawKeyword.toLowerCase();
             const filtered = items.filter(i => 
                 (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
@@ -297,7 +270,6 @@
             if (e.key === 'Enter') searchItem();
         });
 
-        // 启动时建立语义索引，并监听数据变化
         window.addEventListener('load', () => {
             listAll();
             buildIndex();
