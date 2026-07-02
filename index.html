@@ -38,18 +38,14 @@
         <button onclick="listAll()">📋 全部物品</button>
         <button class="export-btn" onclick="exportToCSV()">📥 导出表格</button>
     </div>
-    <p>🔎 找东西：<input type="text" id="searchInput" placeholder="输入指甲剪、充电宝等，按回车搜索"></p>
+    <p>🔎 找东西：<input type="text" id="searchInput" placeholder="试试说“剪指甲的东西”或“充电宝”">
+    </p>
     <p id="status"></p>
     <ul id="itemList"></ul>
 
     <div class="setting-box">
-        <p style="margin-top:0"><strong>🧠 智能同义词管理</strong> <button class="small-btn" onclick="toggleSynonymBox()">展开/收起</button></p>
-        <div id="synonymBox" style="display: none;">
-            <p style="font-size:0.9em;">每行一组同义词，用 <b>=</b> 连接，如：<code>指甲刀=指甲剪=指甲钳</code></p>
-            <textarea id="synonymInput" rows="4" placeholder="指甲刀=指甲剪=指甲钳&#10;充电宝=移动电源&#10;遥控器=遥控"></textarea>
-            <button onclick="saveSynonyms()">💾 保存同义词</button>
-            <p style="font-size:0.8em;color:#888;">保存后，搜索“指甲剪”也会显示“指甲刀”的记录。</p>
-        </div>
+        <p style="margin-top:0"><strong>🧠 语义搜索</strong> <span style="font-size:0.8em;color:#666;">（基于AI，自动理解你找什么）</span></p>
+        <p style="font-size:0.9em;">现在你不需要手动添加同义词了，搜索“剪指甲的玩意儿”就能找到“指甲刀”。</p>
     </div>
         <script>
         // 注册 Service Worker（PWA 离线缓存，Chrome 全屏必要条件）
@@ -62,42 +58,60 @@
         }
 
         const STORAGE_KEY = 'storage_genius_v3';
-        const SYNONYM_KEY = 'synonym_map_v3';
 
-        function getSynonymMap() {
-            const raw = localStorage.getItem(SYNONYM_KEY);
-            if (!raw) return {};
-            try { return JSON.parse(raw); } catch (e) { return {}; }
+        // ---------- 语义搜索核心 ----------
+        // 使用免费、免Key的中文语义编码接口（text2vec-base-chinese）
+        async function getEmbedding(text) {
+            const url = 'https://api-inference.huggingface.co/models/shibing624/text2vec-base-chinese';
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ inputs: text })
+            });
+            if (!response.ok) throw new Error('Embedding API error');
+            const result = await response.json();
+            return result;  // 返回向量数组
         }
 
-        function saveSynonyms() {
-            const text = document.getElementById('synonymInput').value.trim();
-            const map = {};
-            if (text) {
-                text.split('\n').forEach(line => {
-                    const parts = line.split('=').map(s => s.trim()).filter(s => s);
-                    if (parts.length >= 2) {
-                        parts.forEach(word => { map[word] = parts; });
-                    }
-                });
+        // 余弦相似度计算
+        function cosineSimilarity(vecA, vecB) {
+            let dotProduct = 0, normA = 0, normB = 0;
+            for (let i = 0; i < vecA.length; i++) {
+                dotProduct += vecA[i] * vecB[i];
+                normA += vecA[i] * vecA[i];
+                normB += vecB[i] * vecB[i];
             }
-            localStorage.setItem(SYNONYM_KEY, JSON.stringify(map));
-            document.getElementById('status').innerText = '✅ 同义词已更新';
-            displayCurrentSynonyms(map);
+            return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
         }
 
-        function displayCurrentSynonyms(map) {
-            const groups = new Set();
-            Object.values(map).forEach(arr => groups.add(arr.join('=')));
-            document.getElementById('synonymInput').value = Array.from(groups).join('\n');
+        // 为所有物品建立语义索引（首次加载或物品变更时重建）
+        let itemEmbeddings = []; // 存储 { id, embedding }
+
+        async function buildIndex() {
+            const items = getItems();
+            if (items.length === 0) {
+                itemEmbeddings = [];
+                return;
+            }
+            document.getElementById('status').innerText = '🧠 正在理解你的物品...';
+            try {
+                // 批量获取向量（一次API调用处理多个物品名）
+                const names = items.map(i => i.item);
+                const embeddings = await getEmbedding(names);
+                // 返回的是向量数组，每个对应一个名字
+                itemEmbeddings = items.map((item, idx) => ({
+                    id: item.id,
+                    embedding: embeddings[idx]
+                }));
+                document.getElementById('status').innerText = '✅ 语义索引已就绪';
+            } catch (e) {
+                console.error('语义索引构建失败:', e);
+                document.getElementById('status').innerText = '⚠️ 语义服务暂时不可用，将使用普通搜索';
+                itemEmbeddings = [];
+            }
         }
 
-        function expandKeyword(keyword) {
-            const map = getSynonymMap();
-            const lowerKeyword = keyword.toLowerCase();
-            return map[lowerKeyword] ? map[lowerKeyword].slice() : [keyword];
-        }
-
+        // ---------- 物品数据操作 ----------
         function generateId() {
             return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
         }
@@ -118,12 +132,21 @@
         function addItemFromText(text) {
             const { item, location } = parseSpokenText(text);
             const items = getItems();
-            items.push({ id: generateId(), item, location, raw: text, time: new Date().toLocaleString() });
+            items.push({
+                id: generateId(),
+                item,
+                location,
+                raw: text,
+                time: new Date().toLocaleString()
+            });
             saveItems(items);
             document.getElementById('status').innerText = '✅ 已记录：' + item + ' → ' + location;
             listAll();
+            // 索引需重建
+            buildIndex();
         }
 
+        // ---------- 语音录入 ----------
         function startRecord() {
             if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
                 alert('当前浏览器不支持语音，请用 Chrome 或 Edge 打开。');
@@ -135,28 +158,58 @@
             recognition.interimResults = false;
             document.getElementById('status').innerText = '🎙️ 正在听... 说“我把XX放在了YY”';
             recognition.start();
+
             recognition.onresult = (event) => {
                 const spokenText = event.results[0][0].transcript;
                 document.getElementById('status').innerText = '识别：' + spokenText;
                 addItemFromText(spokenText);
             };
+
             recognition.onerror = (event) => {
                 document.getElementById('status').innerText = '❌ 识别出错：' + event.error;
             };
         }
 
-        function searchItem() {
+        // ---------- 搜索（语义增强） ----------
+        async function searchItem() {
             const rawKeyword = document.getElementById('searchInput').value.trim();
             if (!rawKeyword) { listAll(); return; }
+
             const items = getItems();
-            const keywords = expandKeyword(rawKeyword);
-            const lowerKeywords = keywords.map(k => k.toLowerCase());
-            const filtered = items.filter(i => {
-                const fields = (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase();
-                return lowerKeywords.some(kw => fields.includes(kw));
-            });
+            if (items.length === 0) { listAll(); return; }
+
+            // 尝试语义搜索
+            if (itemEmbeddings.length === items.length) {
+                try {
+                    const queryEmbedding = await getEmbedding(rawKeyword);
+                    const scores = items.map((item, idx) => {
+                        const emb = itemEmbeddings.find(e => e.id === item.id);
+                        if (!emb) return { item, score: 0 };
+                        return { item, score: cosineSimilarity(queryEmbedding, emb.embedding) };
+                    });
+                    // 相似度阈值0.5以上才认为相关
+                    const filtered = scores
+                        .filter(s => s.score > 0.5)
+                        .sort((a, b) => b.score - a.score)
+                        .map(s => s.item);
+                    
+                    renderList(filtered);
+                    document.getElementById('status').innerText = filtered.length ? 
+                        `🔍 语义搜索找到 ${filtered.length} 条` : '没找到，换个说法试试？';
+                    return;
+                } catch (e) {
+                    console.log('语义搜索失败，回退到关键字搜索:', e);
+                }
+            }
+
+            // 回退：普通关键字模糊搜索
+            const lowerKeyword = rawKeyword.toLowerCase();
+            const filtered = items.filter(i => 
+                (i.item + ' ' + i.location + ' ' + i.raw).toLowerCase().includes(lowerKeyword)
+            );
             renderList(filtered);
-            document.getElementById('status').innerText = filtered.length ? `找到 ${filtered.length} 条` : '没找到，试试同义词？';
+            document.getElementById('status').innerText = filtered.length ? 
+                `找到 ${filtered.length} 条（关键字匹配）` : '没找到，试试说“剪指甲的工具”？';
         }
 
         function listAll() {
@@ -167,7 +220,7 @@
         function renderList(items) {
             const ul = document.getElementById('itemList');
             ul.innerHTML = '';
-            if (items.length === 0) {
+            if (!items || items.length === 0) {
                 ul.innerHTML = '<li style="justify-content:center;color:#aaa;">暂无物品，试试语音记录</li>';
                 return;
             }
@@ -191,6 +244,7 @@
             items = items.filter(i => i.id !== id);
             saveItems(items);
             listAll();
+            buildIndex();
         }
 
         function exportToCSV() {
@@ -213,14 +267,15 @@
             return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
-        function toggleSynonymBox() {
-            const box = document.getElementById('synonymBox');
-            box.style.display = box.style.display === 'none' ? 'block' : 'none';
-            if (box.style.display === 'block') displayCurrentSynonyms(getSynonymMap());
-        }
+        document.getElementById('searchInput').addEventListener('keypress', e => {
+            if (e.key === 'Enter') searchItem();
+        });
 
-        document.getElementById('searchInput').addEventListener('keypress', e => { if (e.key === 'Enter') searchItem(); });
-        listAll();
+        // 启动时建立语义索引，并监听数据变化
+        window.addEventListener('load', () => {
+            listAll();
+            buildIndex();
+        });
     </script>
 </body>
 </html>
